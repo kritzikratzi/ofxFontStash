@@ -34,6 +34,26 @@
 #include <iostream>
 #include "ofxFontStash.h"
 
+#define FONTSTASH_IMPLEMENTATION
+#include "fontstash.h"
+#define GLFONTSTASH_IMPLEMENTATION
+#define GLFONTSTASH_OPGL3
+
+namespace glFons{
+#include "glfontstash.h"
+}
+
+namespace gl3Fons{
+#include "gl3fontstash.h"
+}
+
+
+
+inline unsigned int toFonsColor(ofColor &color){
+	return (color.r) | (color.g << 8) | (color.b << 16) | (color.a << 24);
+}
+
+
 std::string searchAndReplace(std::string &s,
 							 std::string toReplace,
 							 std::string replaceWith);
@@ -55,20 +75,44 @@ ofxFontStash::ofxFontStash(){
 }
 
 ofxFontStash::~ofxFontStash(){
-	if(stash != NULL) sth_delete(stash);
+	if(stash != NULL){
+		switch( implementation ){
+			case OFX_FONTSTASH_GL: glFons::glfonsDelete(stash); break;
+			case OFX_FONTSTASH_GL3: gl3Fons::gl3fonsDelete(stash); break;
+		}
+	}
 }
 
 bool ofxFontStash::setup(string firstFontFile, float lineHeightPercent , int _texDimension /*has to be powerfOfTwo!*/,
 						 bool createMipMaps, int intraCharPadding, float dpiScale_){
 
+	// try to figure out the current renderer
+	ofBaseGLRenderer * renderer = dynamic_cast<ofBaseGLRenderer*>(ofGetCurrentRenderer().get());
+	if( renderer->getGLVersionMajor() >= 3 ){
+		implementation = OFX_FONTSTASH_GL3;
+	}
+	else{
+		implementation = OFX_FONTSTASH_GL;
+	}
+	
+	
 	if (stash == NULL){
 		dpiScale = dpiScale_;
 		extraPadding = intraCharPadding;
 		lineHeight = lineHeightPercent;
 		texDimension = ofNextPow2(_texDimension);
-		stash = sth_create(texDimension,texDimension, createMipMaps, intraCharPadding, dpiScale);
-		stash->doKerning = 0; //kerning disabled by default
-		stash->charSpacing = 0.0; //spacing neutral by default
+
+		//TODO: the other params are ... old?
+		// stash = gl3fonsCreate(texDimension,texDimension, 0 ); // createMipMaps, intraCharPadding, dpiScale);
+		switch( implementation ){
+			case OFX_FONTSTASH_GL: stash = glFons::glfonsCreate(texDimension,texDimension, 0 ); break;
+			case OFX_FONTSTASH_GL3: stash = gl3Fons::gl3fonsCreate(texDimension,texDimension, 0 ); break;
+		}
+
+		
+		//TODO hansi
+		//stash->doKerning = 0; //kerning disabled by default
+		setCharacterSpacing( 0.0 ); //spacing neutral by default
 		addFont(firstFontFile);
 	}else{
 		ofLogError("ofxFontStash") << "don't call setup() more than once!";
@@ -85,8 +129,10 @@ void ofxFontStash::addFont(const std::string &fontFile)
 	}
 
 	string fontPath = ofToDataPath(fontFile);
-	int fontId = sth_add_font(stash, fontPath.c_str());
-	if (fontId <= 0) {
+	//TODO hansi: is getBasename okay? does ofFile() do strange things in the constructor?
+	string filename = ofFile(fontPath).getBaseName();
+	int fontId = fonsAddFont(stash, filename.c_str(), fontPath.c_str());
+	if (fontId < 0) {
 		ofLogError("ofxFontStash") << "Can't load font! \"" << fontPath.c_str() << "\"";
 		return;
 	}
@@ -104,9 +150,11 @@ void ofxFontStash::draw( const string& text, float size, float x, float y){
 		
 		glPushMatrix();
 		glTranslatef(x, y, 0.0);
-		sth_begin_draw(stash);
-		sth_draw_text( stash, fontIds[0], size, 0, 0 , text.c_str(), &dx ); //this might draw
-		sth_end_draw(stash); // this actually draws
+		fonsClearState(stash);
+		fonsSetSize(stash, size);
+		fonsSetFont(stash, fontIds[0]);
+		fonsDrawText(stash, 0,0, text.c_str(), NULL);
+		
 		glPopMatrix();
 	}else{
 		ofLogError("ofxFontStash") << "can't draw() without having been setup first!";
@@ -120,25 +168,25 @@ void ofxFontStash::drawMultiLine( const string& text, float size, float x, float
 
 		glPushMatrix();
 			glTranslatef(x, y, 0.0f);
-			sth_begin_draw(stash);
-			
+			fonsClearState(stash);
+			fonsSetSize(stash, size);
+			fonsSetFont(stash, fontIds[0]);
+		
 			stringstream ss(text);
 			string s;
 			int line = 0;
 			while ( getline(ss, s, '\n') ) {
 				//cout << s << endl;
 				float dx = 0;
-				sth_draw_text(stash,
-							  fontIds[0],
-							  size,
-							  0.0f,
-							  size * lineHeight * OFX_FONT_STASH_LINE_HEIGHT_MULT * line * dpiScale,
-							  s.c_str(),
-							  &dx
-							  );
+				fonsDrawText(
+							 stash,
+							 0,
+							 size * lineHeight * OFX_FONT_STASH_LINE_HEIGHT_MULT * line * dpiScale,
+							 s.c_str(),
+							 NULL
+							 );
 				line ++;
 			}
-			sth_end_draw(stash);
 		glPopMatrix();
 
 	}else{
@@ -302,6 +350,7 @@ ofVec2f ofxFontStash::drawMultiColumnFormatted(const string &text, float size, f
 
 	// first, calculate the sizes of all the words
 	//
+	fonsClearState(stash);
 	vector<std::string> lines = ofSplitString(localText, "\n");
 	for (int i=0; i<lines.size(); i++) {
 
@@ -334,11 +383,13 @@ ofVec2f ofxFontStash::drawMultiColumnFormatted(const string &text, float size, f
 				word += " ";
 			}
 
-			float x, y, w, h;
-			sth_dim_text( stash, currentFontId, size * currentScale / dpiScale, word.c_str(), &x, &y, &w, &h);
+			float bounds[4];
+			fonsSetFont(stash, currentFontId);
+			fonsSetSize(stash, size * currentScale / dpiScale);
+			fonsTextBounds(stash, 0, 0, word.c_str(), NULL, bounds );
 
 			allWords.push_back(word);
-			wordSizes.push_back(ofVec2f(w, h));
+			wordSizes.push_back(ofVec2f(bounds[2]-bounds[0], bounds[3]-bounds[1]));
 			wordFonts.push_back(currentFontId);
 			wordColors.push_back(currentColor);
 			wordScales.push_back(currentScale);
@@ -361,14 +412,12 @@ ofVec2f ofxFontStash::drawMultiColumnFormatted(const string &text, float size, f
 
 	if (topLeftAlign) {
 		float desc, lineh;
-		sth_vmetrics(stash, wordFonts[0], size, &asc, &desc, &lineh);
+		fonsSetFont(stash, currentFontId);
+		fonsSetSize(stash, size * currentScale / dpiScale);
+		fonsVertMetrics(stash, &asc, &desc, &lineh );
 
 		ofPushMatrix();
 		ofTranslate(0, asc);
-	}
-
-	if (!dryrun) {
-		sth_begin_draw(stash);
 	}
 
 	for (int i=0; i<allWords.size(); i++) {
@@ -383,30 +432,19 @@ ofVec2f ofxFontStash::drawMultiColumnFormatted(const string &text, float size, f
 			drawPointer.x = 0;
 		}
 
-		// we need to flush the vertices if we change the color
 		if (!dryrun) {
-			if (wordColors[i] != ofGetStyle().color) {
-				sth_end_draw(stash);
-				sth_begin_draw(stash);
-
-				ofSetColor(wordColors[i]);
-			}
+			fonsSetColor(stash, toFonsColor(wordColors[i]));
+			fonsSetFont(stash, wordFonts[i]);
+			fonsSetSize(stash, size * wordScales[i]);
+			fonsDrawText(stash, drawPointer.x, drawPointer.y, allWords[i].c_str(), NULL);
 		}
-
-		float dx = 0;
-		if (!dryrun) {
-			sth_draw_text( stash, wordFonts[i], size * wordScales[i], drawPointer.x, drawPointer.y, allWords[i].c_str(), &dx );
-		}
+		
 		drawPointer.x += wordSizes[i].x;
 
 		// save maxX so we'll return the size
 		if (drawPointer.x > maxX) {
 			maxX = drawPointer.x;
 		}
-	}
-
-	if (!dryrun) {
-		sth_end_draw(stash);
 	}
 
 	if (topLeftAlign) {
@@ -421,31 +459,36 @@ float ofxFontStash::getFontHeight(float fontSize)
 {
 	float asc, desc, lineh;
 
-	sth_vmetrics(stash, fontIds[0], fontSize, &asc, &desc, &lineh);
+	
+	fonsClearState(stash);
+	fonsSetFont(stash, fontIds[0]);
+	fonsSetSize(stash, fontSize);
+	fonsVertMetrics(stash, &asc, &desc, &lineh);
 
 	return asc - desc;
 }
 
 
 
-
+// this is obsolete now?
 void ofxFontStash::beginBatch(){
 	if(stash != NULL){
 		batchDrawing = true;
-		sth_begin_draw(stash);
 	}
 }
 
 void ofxFontStash::endBatch(){
 	if(stash != NULL){
 		batchDrawing = false;
-		sth_end_draw(stash);
 	}
 }
 
 void ofxFontStash::setLodBias(float bias){
 	if(stash != NULL){
-		set_lod_bias(stash, bias);
+		// is this
+		// set_lod_bias(stash, bias);
+		// the same as this?
+		fonsSetBlur(stash, bias);
 	}
 }
 
@@ -454,10 +497,11 @@ void ofxFontStash::drawBatch( const string& text, float size, float x, float y){
 		if(batchDrawing){
 			float dx = 0;
 			ofPushMatrix();
-			sth_begin_draw(stash);
 			ofTranslate(x, y);
-			sth_draw_text( stash, fontIds[0], size, 0, 0, text.c_str(), &dx ); //this might draw
-			sth_end_draw(stash); // this actually draws
+			fonsClearState(stash);
+			fonsSetFont(stash, fontIds[0]);
+			fonsSetSize(stash, fontSize);
+			fonsDrawText(stash, 0, 0, text.c_str(), NULL);
 			ofPopMatrix();
 		}else{
 			ofLogError("ofxFontStash") <<"can't drawBatch() without calling beginBatch() first!";
@@ -477,8 +521,9 @@ void ofxFontStash::drawMultiLineBatch( const string& text, float size, float x, 
 			int line = 0;
 			while ( getline(ss, s, '\n') ) {
 				//cout << s << endl;
-				float dx = 0;
-				sth_draw_text( stash, fontIds[0], size, 0.0f, size * lineHeight * OFX_FONT_STASH_LINE_HEIGHT_MULT * line, s.c_str(), &dx );
+				fonsSetFont(stash, fontIds[0]);
+				fonsSetSize(stash, fontSize);
+				fonsDrawText(stash, 0, size * lineHeight * OFX_FONT_STASH_LINE_HEIGHT_MULT * line, s.c_str(), NULL);
 				line ++;
 			}
 		}else{
@@ -489,7 +534,7 @@ void ofxFontStash::drawMultiLineBatch( const string& text, float size, float x, 
 	}
 }
 
-
+// TODO: use OF090 builtins?
 string ofxFontStash::walkAndFill(ofUTF8Ptr begin, ofUTF8Ptr & iter, ofUTF8Ptr end){
 
 	string finalLine = "";
@@ -511,7 +556,9 @@ string ofxFontStash::walkAndFill(ofUTF8Ptr begin, ofUTF8Ptr & iter, ofUTF8Ptr en
 
 void ofxFontStash::setKerning(bool enabled){
 	if (stash){
-		stash->doKerning = enabled ? 1 : 0;
+		//TODO hansi: what is it?
+		//stash->doKerning = enabled ? 1 : 0;
+		ofLogError("ofxFontStash") <<"set kerning not implemented";
 	}else{
 		ofLogError("ofxFontStash") <<"can't setKerning() without having been setup() first!";
 	}
@@ -520,7 +567,10 @@ void ofxFontStash::setKerning(bool enabled){
 
 bool ofxFontStash::getKerning(){
 	if (stash){
-		return stash->doKerning != 0;
+		// return stash->doKerning != 0;
+		//TODO hansi: what is it?
+		ofLogError("ofxFontStash") <<"get kerning not implemented";
+		return false;
 	}else{
 		ofLogError("ofxFontStash") << "can't getKerning() without having been setup() first!";
 	}
@@ -539,9 +589,18 @@ ofRectangle ofxFontStash::getBBox( const string& text, float size, float xx, flo
 		vector<ofRectangle> rects;
 		while ( getline(ss, s, '\n') ) {
 			float dx = 0;
+			float bounds[4];
 			float w, h, x, y;
 
-			sth_dim_text( stash, fontIds[0], size / dpiScale, s.c_str(), &x, &y, &w, &h);
+			fonsClearState(stash);
+			fonsSetFont(stash, fontIds[0]);
+			fonsSetSize(stash, size/dpiScale);
+
+			fonsTextBounds(stash, 0, 0, s.c_str(), NULL, bounds);
+			x = bounds[0];
+			y = bounds[1];
+			w = bounds[2] - x;
+			h = bounds[3] - y;
 			totalArea.x = x + xx;
 			totalArea.y = yy + y ;
 			w = fabs (w - x);
@@ -615,6 +674,15 @@ float ofxFontStash::getLineHeight(){
 float ofxFontStash::getSpaceSize(){
     return stringWidth(" ");
 }
+
+float ofxFontStash::getCharacterSpacing(){
+	return fons__getState(stash)->spacing;
+}
+
+void ofxFontStash::setCharacterSpacing(float spacing){
+	fonsSetSpacing(stash,spacing);
+}
+
 
 float ofxFontStash::stringWidth(const string& s){
     ofRectangle rect = getStringBoundingBox(s, 0,0);

@@ -40,10 +40,11 @@
 #include "ofUTF8.h"
 #include "ofTextConverter.h"
 
-extern "C" {
-	#include "fontstash.h"
-	#include "stb_truetype.h"
-}
+struct FONScontext;
+
+enum ofxFontStashImplementation{
+	OFX_FONTSTASH_GL, OFX_FONTSTASH_GL3
+};
 
 class ofxFontStash{
 
@@ -130,7 +131,7 @@ class ofxFontStash{
 		void setKerning(bool enabled); //use ttf supplied kerning info at draw time or not
 		bool getKerning();
 
-		sth_stash* getStash(){return stash;}; //you probably dont need to mess with that
+		FONScontext* getStash(){return stash;}; //you probably dont need to mess with that
 		float getDpiScale(){return dpiScale;}
 		void setLodBias(float bias); //only makes sense when using mipmaps!
 
@@ -144,9 +145,9 @@ class ofxFontStash{
         float getLineHeight();
         float getSpaceSize();
 
-		float getCharacterSpacing(){return stash->charSpacing;}
-		void setCharacterSpacing(float spacing){stash->charSpacing = spacing;}
-    
+		float getCharacterSpacing();
+		void setCharacterSpacing(float spacing);
+	
         float stringWidth(const string& s);
         float stringHeight(const string& s);
     
@@ -158,7 +159,7 @@ class ofxFontStash{
 
 		int					extraPadding; //used for mipmaps
 		float				lineHeight; // as percent, 1.0 would be normal
-		struct sth_stash*	stash;
+		struct FONScontext*	stash;
 
 		int texDimension;
 		vector<int>			fontIds;
@@ -175,6 +176,9 @@ class ofxFontStash{
         // ofTrueTypeFont parity attributes
         int					fontSize;
 		float				dpiScale;
+	
+		ofxFontStashImplementation implementation; 
+	
 };
 
 
