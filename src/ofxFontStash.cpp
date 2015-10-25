@@ -150,7 +150,13 @@ void ofxFontStash::draw( const string& text, float size, float x, float y){
 		
 		glPushMatrix();
 		glTranslatef(x, y, 0.0);
-		fonsClearState(stash);
+		switch(implementation){
+			case OFX_FONTSTASH_GL: break;
+			case OFX_FONTSTASH_GL3:
+				ofMatrix4x4 mat = ofGetCurrentMatrix(OF_MATRIX_PROJECTION);
+				gl3Fons::gl3fonsProjection( stash, mat.getPtr() ); break;
+		}
+		
 		fonsSetSize(stash, size);
 		fonsSetFont(stash, fontIds[0]);
 		fonsDrawText(stash, 0,0, text.c_str(), NULL);
@@ -168,7 +174,6 @@ void ofxFontStash::drawMultiLine( const string& text, float size, float x, float
 
 		glPushMatrix();
 			glTranslatef(x, y, 0.0f);
-			fonsClearState(stash);
 			fonsSetSize(stash, size);
 			fonsSetFont(stash, fontIds[0]);
 		
@@ -350,7 +355,6 @@ ofVec2f ofxFontStash::drawMultiColumnFormatted(const string &text, float size, f
 
 	// first, calculate the sizes of all the words
 	//
-	fonsClearState(stash);
 	vector<std::string> lines = ofSplitString(localText, "\n");
 	for (int i=0; i<lines.size(); i++) {
 
@@ -460,7 +464,6 @@ float ofxFontStash::getFontHeight(float fontSize)
 	float asc, desc, lineh;
 
 	
-	fonsClearState(stash);
 	fonsSetFont(stash, fontIds[0]);
 	fonsSetSize(stash, fontSize);
 	fonsVertMetrics(stash, &asc, &desc, &lineh);
@@ -498,7 +501,6 @@ void ofxFontStash::drawBatch( const string& text, float size, float x, float y){
 			float dx = 0;
 			ofPushMatrix();
 			ofTranslate(x, y);
-			fonsClearState(stash);
 			fonsSetFont(stash, fontIds[0]);
 			fonsSetSize(stash, fontSize);
 			fonsDrawText(stash, 0, 0, text.c_str(), NULL);
@@ -592,7 +594,6 @@ ofRectangle ofxFontStash::getBBox( const string& text, float size, float xx, flo
 			float bounds[4];
 			float w, h, x, y;
 
-			fonsClearState(stash);
 			fonsSetFont(stash, fontIds[0]);
 			fonsSetSize(stash, size/dpiScale);
 
